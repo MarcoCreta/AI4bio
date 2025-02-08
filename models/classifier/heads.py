@@ -25,6 +25,10 @@ class ClassificationHead(nn.Module):
         self.bn2 = nn.BatchNorm1d(hidden_size//2)
         self.dropout2 = nn.Dropout(dropout)
 
+        self.layer3 = nn.Linear(hidden_size//2, hidden_size//2)
+        self.bn3 = nn.BatchNorm1d(hidden_size//2)
+        self.dropout3 = nn.Dropout(dropout)
+
         self.linear4 = nn.Linear(hidden_size//2, output_size)  # No activation here!
 
     def forward(self, x):
@@ -37,6 +41,11 @@ class ClassificationHead(nn.Module):
         x = self.bn2(x)
         x = self.activation(x)
         x = self.dropout2(x)
+
+        x = self.layer3(x)
+        x = self.bn3(x)
+        x = self.activation(x)
+        x = self.dropout3(x)
 
         x = self.linear4(x)  # No activation here (CrossEntropyLoss applies softmax)
         return x
@@ -80,13 +89,24 @@ class ClsAttn(nn.Module):
         x = self.FF(x)
         return x
 
-    def inference(self, x):
+    import torch
+    import torch.nn.functional as F
+
+    def inference(self, x, threshold=0.5):
         self.eval()
         with torch.no_grad():
-
             outputs = self.forward(x)  # Forward pass
             probabilities = F.softmax(outputs, dim=1)  # Apply softmax
-            predicted_classes = torch.argmax(probabilities, dim=1)  # Get predicted class indices
+
+            # Get the class with the maximum probability
+            predicted_min = torch.argmax(probabilities, dim=1)
+
+            # Create a tensor with True where probabilities exceed the threshold
+            predicted_classes = (probabilities > threshold).int()
+
+            # Ensure that the class with the max probability is included, even if its prob is below the threshold
+            for i in range(probabilities.size(0)):  # Loop over batch
+                predicted_classes[i, predicted_min[i]] = 1
 
             predicted_classes = predicted_classes.cpu().numpy()
 

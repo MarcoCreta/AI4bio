@@ -63,25 +63,35 @@ def plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch, save_p
     plt.savefig(save_path)
     plt.close()
 
-def train_cls(cls_head, train_loader, validation_loader, optimizer, weights=None, num_epochs=100, emb_chunks=None, fusion=None, suffix='test', device='cuda:0'):
-    """Train a classification head for a multi-class classification task."""
+
+def train_cls(
+        cls_head, train_loader, validation_loader, optimizer,weights=None, num_epochs=100, emb_chunks=None, fusion=None, suffix='test', device='cuda:0'
+):
+    """Train a classification head for a multi-label classification task."""
+
     cls_head.to(device)
-    criterion = nn.CrossEntropyLoss(weight=weights)
-    #criterion = nn.BCELoss()
+
+    # Use Binary Cross Entropy with Logits for multi-label classification
+    criterion = nn.BCEWithLogitsLoss(pos_weight=weights)
 
     train_loss_history = []
     val_loss_history = []
 
     for epoch in range(num_epochs):
         train_loss = train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fusion, device, epoch)
-        #val_loss = validate_one_epoch(cls_head, validation_loader, criterion, device)
+        #val_loss = validate_one_epoch(cls_head, validation_loader, criterion, emb_chunks, fusion, device)
 
         train_loss_history.append(train_loss)
         #val_loss_history.append(val_loss)
 
-       # if epoch % 20 == 0 and epoch != 0: plot_loss_curves(train_loss_history,val_loss_history,suffix,epoch, os.path.join(Config.OUTPUT_PATH,f'loss_curves/{suffix}_epoch_{epoch}.png'))
+        # Save loss curves periodically
+        #if epoch % 20 == 0 and epoch != 0: plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch,os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_epoch_{epoch}.png'))
 
-    # Save the final model and loss curves
-    #torch.save(cls_head.state_dict(), os.path.join(Config.OUTPUT_PATH, f'weights/{suffix}.pth')))
-    plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch, os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_final.png'))
+    # Save final model and loss curves
+    #torch.save(cls_head.state_dict(), os.path.join(Config.OUTPUT_PATH, f'weights/{suffix}.pth'))
+    plot_loss_curves(
+        train_loss_history, val_loss_history, suffix, num_epochs,
+        os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_final.png')
+    )
+
     return cls_head

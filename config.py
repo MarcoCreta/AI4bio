@@ -6,7 +6,7 @@ class Config():
 
     DATA_NAME = "data/prot_gpt2_multi.pt"
 
-    CLASSES = ["R-HSA-metabolism"]
+    CLASSES = ["R-HSA-metabolism", "R-HSA-109581"]
 
     RANDOMNESS = {
         "PYTORCH_SEED" : 42,
@@ -22,11 +22,11 @@ class Config():
     }
 
     TRAIN_ARGS = {
-        "N_EPOCHS" : 3,
+        "N_EPOCHS" : 300,
         "EMB_FUSION_FN" : None,
         "BATCH_SIZE" : 64,
         "LEARNING_RATE" : 5e-4,
-        "WEIGHT_DECAY" : 1e-4,
+        "WEIGHT_DECAY" : 0, #1e-4,
         "EMB_CHUNKS" : 5,
     }
 

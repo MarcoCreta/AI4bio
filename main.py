@@ -16,7 +16,7 @@ from sklearn.metrics import precision_recall_fscore_support
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import confusion_matrix
 import torch.nn.functional as F
-
+from common.utils import compute_multilabel_class_weights
 
 if __name__ == "__main__":
 
@@ -40,8 +40,6 @@ if __name__ == "__main__":
     g.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
 
 
-
-
     mapping = pathways_to_class_mapping(path=os.path.join(Config.OUTPUT_PATH,"data"), input_names=Config.CLASSES)
 
     dataset = FastaDataset(file_path=Config.DATASET, class_mapping=mapping, data_path=os.path.join(Config.OUTPUT_PATH, Config.DATA_NAME))
@@ -58,8 +56,9 @@ if __name__ == "__main__":
         worker_init_fn=seed_worker,
         generator=g)
 
-    labels = dataset.labels
-    weights = torch.tensor(np.sqrt(compute_class_weight(class_weight="balanced", classes=np.unique(labels), y=labels)), dtype=torch.float).to(device)
+    onehot_labels = dataset.get_labels()
+
+    weights = torch.tensor(compute_multilabel_class_weights(onehot_labels), dtype=torch.float).to(device)
 
     cls_head = ClsAttn(Config.FF_ARGS['INPUT_SIZE'], Config.FF_ARGS['HIDDEN_SIZE'], Config.FF_ARGS['OUTPUT_SIZE'], Config.FF_ARGS['DROPOUT'])
 
@@ -81,11 +80,33 @@ if __name__ == "__main__":
         "test",
         str(device))
 
+    from sklearn.metrics import precision_recall_fscore_support, classification_report
+
+    # Get predictions
     predicted_classes = cls.inference(dataset.embeddings.to(device))
 
-    print(precision_recall_fscore_support(labels, predicted_classes, average='macro'))
-    print("\n\n\n")
-    print(confusion_matrix(labels, predicted_classes))
+    # Convert labels to NumPy
+    labels_np = onehot_labels.clone().cpu().numpy()  # Ensure labels are NumPy
+
+    # Compute per-class precision, recall, and F1-score (handling zero division)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        labels_np, predicted_classes, average=None, zero_division=0
+    )
+
+    # Compute macro-averaged scores
+    macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
+        labels_np, predicted_classes, average='macro', zero_division=0
+    )
+
+    # Compute per-class classification report
+    class_names = ["default"]
+    class_names.extend(Config.CLASSES)
+    report = classification_report(labels_np, predicted_classes, target_names = class_names)
+
+    # Print results
+    print(f"Macro Precision: {macro_precision:.4f}, Macro Recall: {macro_recall:.4f}, Macro F1: {macro_f1:.4f}")
+    print("\nPer-Class Scores:\n", report)
+
 
 
 

@@ -7,41 +7,60 @@ from common.utils import read_fasta
 from sklearn.utils.class_weight import compute_sample_weight
 import numpy as np
 
+from torch.utils.data import Dataset
+import torch
+import os
+from Bio import SeqIO
+from collections import OrderedDict
+from typing import Optional, Dict, List
+
 class FastaDataset(Dataset):
-    def __init__(self, file_path: str, data_path: Optional[str] = None, class_mapping: Optional[dict[str, list[str]]] = None):
+    def __init__(self, file_path: str, data_path: Optional[str] = None, class_mapping: Optional[Dict[str, List[str]]] = None):
         self.sequences = []
         self.identifiers = []
         self.embeddings = []
-        self.labels = []  # Store class labels if provided in the class_mapping
+        self.labels = []         # Store multi-class labels
+        self.onehot_labels = []  # Store multi-hot encoded labels
 
-        # Map pathways to numeric classes using OrderedDict to ensure consistent ordering
-        pathway_to_class = OrderedDict()
+        # Map pathways to numeric class indices (OrderedDict ensures consistency)
+        self.pathway_to_class = OrderedDict()
         if class_mapping:
             tmp = [('default',0)] #set default class to 0
             tmp.extend([(pathway, idx+1) for idx, pathway in enumerate(class_mapping.keys())])
-            pathway_to_class = OrderedDict(tmp)
+            self.pathway_to_class = OrderedDict(tmp)
 
-            # Reverse the class_mapping for easy lookup
+            # Reverse mapping: protein ID -> list of class indices
             reverse_mapping = {}
             for pathway, proteins in class_mapping.items():
                 for protein in proteins:
-                    reverse_mapping[protein] = pathway_to_class.get(pathway, 0)
+                    if protein not in reverse_mapping:
+                        reverse_mapping[protein] = []
+                    reverse_mapping[protein].append(self.pathway_to_class.get(pathway, 0))
+            reverse_mapping = {key:np.unique(reverse_mapping[key]) for key in reverse_mapping}
 
         try:
             for record in SeqIO.parse(file_path, "fasta"):
                 self.sequences.append(str(record.seq))  # Protein sequence
-                identifier = record.id.split("|")[-1]  # Extract label if encoded in the FASTA header
+                identifier = record.id.split("|")[-1]  # Extract identifier from FASTA header
                 self.identifiers.append(identifier)
 
                 if class_mapping:
-
-                    self.labels.append(reverse_mapping.get(identifier, 0))
+                    # Assign list of class indices (multi-label support)
+                    label_indices = reverse_mapping.get(identifier, [0])
+                    self.labels.append(label_indices)
 
         except Exception as e:
             print(f"Error during initialization: {e}")
 
+        # Create one-hot encoded labels
+        num_classes = len(self.pathway_to_class)
+        for label_indices in self.labels:
+            onehot = torch.zeros(num_classes, dtype=torch.float)
+            onehot[label_indices] = 1  # Set indices for active classes
+            self.onehot_labels.append(onehot)
+
         try:
-            # If a data_path is provided, load precomputed tensors
+            # Load precomputed embeddings if available
             if data_path and os.path.exists(data_path):
                 self.embeddings = torch.load(data_path)
             else:
@@ -59,11 +78,15 @@ class FastaDataset(Dataset):
         else:
             embedding = torch.zeros(1)  # Default embedding
 
-        label = self.labels[idx] if self.labels and idx < len(self.labels) else -1  # Default label
-        return idx, self.sequences[idx], self.identifiers[idx], label, embedding
+        # Get one-hot encoded label
+        onehot_label = self.onehot_labels[idx] if self.onehot_labels and idx < len(self.onehot_labels) else torch.zeros(len(self.pathway_to_class))
+
+        return idx, self.sequences[idx], self.identifiers[idx], onehot_label, embedding
 
     def get_labels(self):
-        return torch.tensor(self.labels) if self.labels else None
+        """Return all one-hot labels as a tensor."""
+        return torch.stack(self.onehot_labels) if self.onehot_labels else None
+
 
 
 
@@ -81,6 +104,44 @@ class BalancedBatchSampler(WeightedRandomSampler):
 
         super().__init__(sample_weights, len(sample_weights))
 
+from torch.utils.data import Sampler
+import numpy as np
+import torch
+from sklearn.utils.class_weight import compute_class_weight
+from common.utils import compute_multilabel_class_weights
+
+class BalancedBatchSampler(Sampler):
+    def __init__(self, dataset: FastaDataset):
+        """
+        Balanced batch sampler for multi-label datasets.
+
+        Args:
+            dataset (FastaDataset): Dataset with one-hot encoded labels.
+        """
+        onehot_labels = dataset.get_labels()  # Shape: (num_samples, num_classes)
+
+        # Normalize to keep values reasonable
+        class_weights = compute_multilabel_class_weights(onehot_labels)
+
+        # Compute per-sample weights based on their labels
+        sample_weights = (onehot_labels.cpu().numpy() * class_weights).sum(axis=1)
+        sample_weights = sample_weights / sample_weights.sum()  # Normalize
+
+        # Store sample weights as a tensor
+        self.sample_weights = torch.tensor(sample_weights, dtype=torch.float)
+
+        # Use WeightedRandomSampler for balanced sampling
+        self.sampler = torch.utils.data.WeightedRandomSampler(
+            weights=self.sample_weights,
+            num_samples=len(self.sample_weights),
+            replacement=True
+        )
+
+    def __iter__(self):
+        return iter(self.sampler)
+
+    def __len__(self):
+        return len(self.sample_weights)
 
 
 

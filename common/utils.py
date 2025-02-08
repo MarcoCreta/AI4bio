@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from config import Config
+import torch
 
 def read_fasta(file_path:str):
     sequences = []
@@ -155,3 +156,26 @@ def print_counts(counts):
     print(f"Boxplot saved as {boxplot_path}")
 
 
+def compute_multilabel_class_weights(onehot_labels):
+    """
+    Compute class weights for multi-label classification based on class frequency.
+
+    Args:
+        onehot_labels (torch.Tensor): A binary tensor of shape (N, num_classes) where each row is a multi-hot vector.
+
+    Returns:
+        torch.Tensor: Weights for each class, shape (num_classes,)
+    """
+    num_classes = onehot_labels.shape[1]
+    class_counts = onehot_labels.sum(dim=0).cpu().numpy()  # Count occurrences of each class
+
+    # Avoid division by zero (if a class has no samples)
+    class_counts[class_counts == 0] = 1
+
+    # Compute inverse sqrt class weights (to downweight frequent classes)
+    class_weights = 1.0 / np.sqrt(class_counts)
+
+    # Normalize to keep values reasonable
+    class_weights = class_weights / class_weights.sum()
+
+    return class_weights
