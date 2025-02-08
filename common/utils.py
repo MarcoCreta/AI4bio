@@ -6,6 +6,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
+from config import Config
 
 def read_fasta(file_path:str):
     sequences = []
@@ -78,8 +79,10 @@ def count_tokens(dataset, tokenizer):
         None
     """
     # Tokenize sequences and compute their lengths
-    tokenized_lengths = np.array([len(tokenizer.encode(sequence)) for _, sequence, *_ in dataset])
+    #re.sub(r"[UZOB]", "X", sequence_Example)
+    tokenized_lengths = np.array([len(tokenizer(" ".join(list(dataset[148][1])), add_special_tokens=True).input_ids) for _, sequence, *_ in dataset])
     tokenized_lengths = np.sort(tokenized_lengths)
+    #remove top 0.03% outliers
     tokenized_lengths = tokenized_lengths[0:int(len(tokenized_lengths)*0.997)]
 
     # Count the occurrences of each token length
@@ -93,7 +96,7 @@ def count_tokens(dataset, tokenizer):
     return counts
 
 
-def print_counts(counts, output_path):
+def print_counts(counts):
     import numpy as np
     import matplotlib.pyplot as plt
     import os
@@ -114,7 +117,7 @@ def print_counts(counts, output_path):
     plt.legend()
 
     # Save the barplot
-    barplot_path = os.path.join(output_path, "barplot.jpg")
+    barplot_path = os.path.join(Config.OUTPUT_PATH, "plots/barplot.jpg")
     plt.tight_layout()
     plt.savefig(barplot_path, dpi=300)
     plt.show()
@@ -145,7 +148,7 @@ def print_counts(counts, output_path):
     plt.ylabel("Counts in Bins", fontsize=12)
 
     # Save the boxplot
-    boxplot_path = os.path.join(output_path, "hist.jpg")
+    boxplot_path = os.path.join(Config.OUTPUT_PATH, "plots/hist.jpg")
     plt.tight_layout()
     plt.savefig(boxplot_path, dpi=300)
     plt.show()

@@ -9,23 +9,23 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 
+import torch
+import torch.nn as nn
+
 class ClassificationHead(nn.Module):
     def __init__(self, input_size=256, hidden_size=128, output_size=10, dropout=0.5):
         super(ClassificationHead, self).__init__()
+
         self.layer1 = nn.Linear(input_size, hidden_size)
         self.bn1 = nn.BatchNorm1d(hidden_size)
         self.dropout1 = nn.Dropout(dropout)
-        self.activation = nn.ReLU()  # Added activation
+        self.activation = nn.ReLU()
 
-        # Optional second layer
-        self.layer2 = nn.Linear(hidden_size, hidden_size)
-        self.bn2 = nn.BatchNorm1d(hidden_size)
+        self.layer2 = nn.Linear(hidden_size, hidden_size//2)
+        self.bn2 = nn.BatchNorm1d(hidden_size//2)
         self.dropout2 = nn.Dropout(dropout)
 
-        self.linear3 = nn.Linear(hidden_size, output_size)
-
-        self.softmax = nn.Softmax(dim=0)
-        # Removed Softmax
+        self.linear4 = nn.Linear(hidden_size//2, output_size)  # No activation here!
 
     def forward(self, x):
         x = self.layer1(x)
@@ -33,12 +33,49 @@ class ClassificationHead(nn.Module):
         x = self.activation(x)
         x = self.dropout1(x)
 
-        # If layer2 is used
         x = self.layer2(x)
         x = self.bn2(x)
         x = self.activation(x)
         x = self.dropout2(x)
 
-        x = self.linear3(x)
-        x = self.softmax(x)
+        x = self.linear4(x)  # No activation here (CrossEntropyLoss applies softmax)
+        return x
+
+class AttentionPooling(nn.Module):
+    """
+    Implementation of SelfAttentionPooling
+    Original Paper: Self-Attention Encoding and Pooling for Speaker Recognition
+    https://arxiv.org/pdf/2008.01077v1.pdf
+    """
+
+    def __init__(self, input_dim):
+        super(AttentionPooling, self).__init__()
+        self.W = nn.Linear(input_dim, 1)
+
+    def forward(self, batch_rep):
+        """
+        input:
+            batch_rep : size (N, T, H), N: batch size, T: sequence length, H: Hidden dimension
+
+        attention_weight:
+            att_w : size (N, T, 1)
+
+        return:
+            utter_rep: size (N, H)
+        """
+        att_w = F.softmax(self.W(batch_rep).squeeze(-1), dim=1).unsqueeze(-1)  # dim=1 is the sequence length dimension
+        utter_rep = torch.sum(batch_rep * att_w, dim=1)
+
+        return utter_rep
+
+
+class ClsAttn(nn.Module):
+    def __init__(self, input_size=1280, hidden_size=256, output_size=2, dropout=0.5):
+        super(ClsAttn, self).__init__()
+        self.attn_pooling = AttentionPooling(input_size)
+        self.FF = ClassificationHead(input_size, hidden_size, output_size, dropout)
+
+    def forward(self, x):
+        x = self.attn_pooling(x)
+        x = self.FF(x)
         return x

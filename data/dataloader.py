@@ -4,6 +4,8 @@ from torch.utils.data import Dataset, BatchSampler, DataLoader, WeightedRandomSa
 from typing import Dict, Optional
 from collections import OrderedDict, Counter
 from common.utils import read_fasta
+from sklearn.utils.class_weight import compute_sample_weight
+import numpy as np
 
 class FastaDataset(Dataset):
     def __init__(self, file_path: str, data_path: Optional[str] = None, class_mapping: Optional[dict[str, list[str]]] = None):
@@ -75,9 +77,7 @@ class BalancedBatchSampler(WeightedRandomSampler):
         if labels is None:
             raise ValueError("Dataset must have labels for balanced sampling.")
 
-        class_count = Counter(labels.tolist())  # Count occurrences of each class
-        class_weights = {cls: 1.0 / count for cls, count in class_count.items()}  # Compute weights
-        sample_weights = [class_weights[label] for label in labels.tolist()]  # Map weights to samples
+        sample_weights = np.sqrt(compute_sample_weight(class_weight="balanced", y=labels))
 
         super().__init__(sample_weights, len(sample_weights))
 

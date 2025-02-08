@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-
+from config import Config
 def train_one_epoch(cls_head, train_loader, optimizer, criterion, device, epoch):
     """Train the classification head for one epoch."""
     cls_head.train()
@@ -16,10 +16,11 @@ def train_one_epoch(cls_head, train_loader, optimizer, criterion, device, epoch)
 
             optimizer.zero_grad()
 
-            embeddings, targets = embeddings.to(device), targets.float().unsqueeze(1).to(device)
-            outputs = cls_head(embeddings)
+            embeddings, targets = embeddings.to(device), targets.to(device)
 
-            loss = criterion(outputs, targets)
+            logits = cls_head(embeddings).to(device)  # Forward pass
+
+            loss = criterion(logits, targets)
             loss.backward()
             optimizer.step()
 
@@ -54,17 +55,11 @@ def plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch, save_p
     plt.savefig(save_path)
     plt.close()
 
-def train_cls(cls_head, train_loader, validation_loader, optimizer, num_epochs=100, suffix='test', device='cuda:0'):
+def train_cls(cls_head, train_loader, validation_loader, optimizer, weights=None, num_epochs=100, suffix='test', device='cuda:0'):
     """Train a classification head for a multi-class classification task."""
-    home = "/homes/mcreta"
-    loss_curve_dir = os.path.join(home, 'AI4bio', 'loss_curves')
-    weights_dir = os.path.join(home, 'AI4bio', 'weights')
-    os.makedirs(loss_curve_dir, exist_ok=True)
-    os.makedirs(weights_dir, exist_ok=True)
-
     cls_head.to(device)
-    #criterion = nn.CrossEntropyLoss()
-    criterion = nn.BCELoss()
+    criterion = nn.CrossEntropyLoss(weight=weights)
+    #criterion = nn.BCELoss()
 
     train_loss_history = []
     val_loss_history = []
@@ -76,8 +71,9 @@ def train_cls(cls_head, train_loader, validation_loader, optimizer, num_epochs=1
         train_loss_history.append(train_loss)
         #val_loss_history.append(val_loss)
 
-       # if epoch % 20 == 0 and epoch != 0: plot_loss_curves(train_loss_history,val_loss_history,suffix,epoch,os.path.join(loss_curve_dir, f'{suffix}_epoch_{epoch}.png'))
+       # if epoch % 20 == 0 and epoch != 0: plot_loss_curves(train_loss_history,val_loss_history,suffix,epoch, os.path.join(Config.OUTPUT_PATH,f'loss_curves/{suffix}_epoch_{epoch}.png'))
 
     # Save the final model and loss curves
-    #torch.save(cls_head.state_dict(), os.path.join(weights_dir, f'{suffix}.pth'))
-    plot_loss_curves(train_loss_history,val_loss_history,suffix, epoch, os.path.join(loss_curve_dir, f'{suffix}_final.png'))
+    #torch.save(cls_head.state_dict(), os.path.join(Config.OUTPUT_PATH, f'weights/{suffix}.pth')))
+    plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch, os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_final.png'))
+    return cls_head
