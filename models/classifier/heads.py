@@ -79,3 +79,15 @@ class ClsAttn(nn.Module):
         x = self.attn_pooling(x)
         x = self.FF(x)
         return x
+
+    def inference(self, x):
+        self.eval()
+        with torch.no_grad():
+
+            outputs = self.forward(x)  # Forward pass
+            probabilities = F.softmax(outputs, dim=1)  # Apply softmax
+            predicted_classes = torch.argmax(probabilities, dim=1)  # Get predicted class indices
+
+            predicted_classes = predicted_classes.cpu().numpy()
+
+        return predicted_classes

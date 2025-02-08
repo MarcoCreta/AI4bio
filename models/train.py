@@ -5,7 +5,16 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from config import Config
-def train_one_epoch(cls_head, train_loader, optimizer, criterion, device, epoch):
+
+
+fusion_functions = {
+    "slicing" : lambda v,n : v[:n,:],
+}
+
+slice_fusion = {}
+
+
+def train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fusion, device, epoch):
     """Train the classification head for one epoch."""
     cls_head.train()
     total_train_loss = 0
@@ -16,10 +25,9 @@ def train_one_epoch(cls_head, train_loader, optimizer, criterion, device, epoch)
 
             optimizer.zero_grad()
 
-            embeddings, targets = embeddings.to(device), targets.to(device)
+            embeddings, targets = embeddings[:,:emb_chunks,:].to(device), targets.to(device)
 
             logits = cls_head(embeddings).to(device)  # Forward pass
-
             loss = criterion(logits, targets)
             loss.backward()
             optimizer.step()
@@ -29,7 +37,7 @@ def train_one_epoch(cls_head, train_loader, optimizer, criterion, device, epoch)
 
     return total_train_loss / len(train_loader)
 
-def validate_one_epoch(cls_head, validation_loader, criterion, device):
+def validate_one_epoch(cls_head, validation_loader, criterion, emb_chunks, fusion, device):
     """Validate the classification head for one epoch."""
     cls_head.eval()
     total_val_loss = 0
@@ -55,7 +63,7 @@ def plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch, save_p
     plt.savefig(save_path)
     plt.close()
 
-def train_cls(cls_head, train_loader, validation_loader, optimizer, weights=None, num_epochs=100, suffix='test', device='cuda:0'):
+def train_cls(cls_head, train_loader, validation_loader, optimizer, weights=None, num_epochs=100, emb_chunks=None, fusion=None, suffix='test', device='cuda:0'):
     """Train a classification head for a multi-class classification task."""
     cls_head.to(device)
     criterion = nn.CrossEntropyLoss(weight=weights)
@@ -65,7 +73,7 @@ def train_cls(cls_head, train_loader, validation_loader, optimizer, weights=None
     val_loss_history = []
 
     for epoch in range(num_epochs):
-        train_loss = train_one_epoch(cls_head, train_loader, optimizer, criterion, device, epoch)
+        train_loss = train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fusion, device, epoch)
         #val_loss = validate_one_epoch(cls_head, validation_loader, criterion, device)
 
         train_loss_history.append(train_loss)
