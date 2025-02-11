@@ -109,28 +109,38 @@ import numpy as np
 import torch
 from sklearn.utils.class_weight import compute_class_weight
 from common.utils import compute_multilabel_class_weights
+from torch.utils.data import Sampler, Subset
+
 
 class BalancedBatchSampler(Sampler):
     def __init__(self, dataset: FastaDataset):
         """
         Balanced batch sampler for multi-label datasets.
-
         Args:
-            dataset (FastaDataset): Dataset with one-hot encoded labels.
+            dataset (FastaDataset or Subset): Dataset with one-hot encoded labels.
         """
-        onehot_labels = dataset.get_labels()  # Shape: (num_samples, num_classes)
+        # If a Subset is passed, get the underlying dataset and select only the subset labels.
+        if isinstance(dataset, Subset):
+            # dataset.dataset is the original FastaDataset and dataset.indices are the selected indices.
+            full_labels = dataset.dataset.get_labels()  # Tensor of shape (num_samples, num_classes)
+            # Select only the labels for the subset.
+            onehot_labels = full_labels[dataset.indices]
+            self.indices = dataset.indices
+        else:
+            onehot_labels = dataset.get_labels()
+            self.indices = list(range(len(dataset)))
 
-        # Normalize to keep values reasonable
+        # Compute per-class weights.
         class_weights = compute_multilabel_class_weights(onehot_labels)
 
-        # Compute per-sample weights based on their labels
+        # Compute per-sample weights based on their labels.
         sample_weights = (onehot_labels.cpu().numpy() * class_weights).sum(axis=1)
         sample_weights = sample_weights / sample_weights.sum()  # Normalize
 
-        # Store sample weights as a tensor
+        # Store sample weights as a tensor.
         self.sample_weights = torch.tensor(sample_weights, dtype=torch.float)
 
-        # Use WeightedRandomSampler for balanced sampling
+        # Use WeightedRandomSampler for balanced sampling.
         self.sampler = torch.utils.data.WeightedRandomSampler(
             weights=self.sample_weights,
             num_samples=len(self.sample_weights),
@@ -142,8 +152,6 @@ class BalancedBatchSampler(Sampler):
 
     def __len__(self):
         return len(self.sample_weights)
-
-
 
 
 import torch
