@@ -14,21 +14,30 @@ class Config():
         "PYTHON_SEED": 42,
     }
 
-    FF_ARGS = {
-        "INPUT_SIZE" : 1280,
-        "OUTPUT_SIZE" : len(CLASSES)+1,
-        "HIDDEN_SIZE" : 512,
-        "DROPOUT" : 0.5,
-    }
-
     TRAIN_ARGS = {
         "N_EPOCHS" : 300,
         "EMB_FUSION_FN" : None,
         "BATCH_SIZE" : 64,
-        "LEARNING_RATE" : 5e-4,
-        "WEIGHT_DECAY" : 0, #1e-4,
+        "LEARNING_RATE" : 1e-5,
+        "WEIGHT_DECAY" : 1e-3, #keep fixed, generate an upper bound of val below 0.1
         "EMB_CHUNKS" : 5,
+        "ATTN_POOLING" : True,
+        "EMB_SIZE" : 1280,
+        "TOKEN_PE" : True,
+        "CHUNK_RE" : True,
     }
+
+    FF_ARGS = {
+        "INPUT_SIZE" : 1280,
+        "OUTPUT_SIZE" : 3,
+        "HIDDEN_SIZE" : 512,
+        "DROPOUT" : 0.5,
+    }
+
+    def __init__(self):
+        self.FF_ARGS['INPUT_SIZE'] = self.TRAIN_ARGS['EMB_SIZE']
+        self.FF_ARGS['OUTPUT_SIZE'] = len(self.CLASSES)+1
+
 
     @classmethod
     def json(cls):

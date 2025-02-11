@@ -179,3 +179,11 @@ def compute_multilabel_class_weights(onehot_labels):
     class_weights = class_weights / class_weights.sum()
 
     return class_weights
+
+
+def merge_embeddings(embeddings):
+    """
+    Merges overlapping embeddings using a weighted mean for overlapped regions.
+    Assumes embeddings are in the shape (num_windows, embedding_dim).
+    """
+    raise NotImplementedError

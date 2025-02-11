@@ -5,19 +5,16 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from config import Config
-
-
-fusion_functions = {
-    "slicing" : lambda v,n : v[:n,:],
-}
-
-slice_fusion = {}
+from common.utils import merge_embeddings
 
 
 def train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fusion, device, epoch):
     """Train the classification head for one epoch."""
     cls_head.train()
     total_train_loss = 0
+
+    #num_chunks = emb_chunks  # Typically 5
+    #chunk_positions = torch.tensor([256 * i + 256 for i in range(num_chunks)], dtype=torch.float32, device=device)
 
     with tqdm(train_loader, unit="batch") as tepoch:
         for _, _, _, targets, embeddings in tepoch:
@@ -26,6 +23,12 @@ def train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fu
             optimizer.zero_grad()
 
             embeddings, targets = embeddings[:,:emb_chunks,:].to(device), targets.to(device)
+
+            #batch_size = embeddings.shape[0]
+            #token_positions = chunk_positions.unsqueeze(0).expand(batch_size, -1)  # Shape: (batch_size, num_chunks)
+
+            if not Config.TRAIN_ARGS['ATTN_POOLING']:
+                embeddings = embeddings[:,0,:]
 
             logits = cls_head(embeddings).to(device)  # Forward pass
             loss = criterion(logits, targets)
@@ -44,8 +47,11 @@ def validate_one_epoch(cls_head, validation_loader, criterion, emb_chunks, fusio
 
     with torch.no_grad():
         for _, _, _, targets, embeddings in validation_loader:
-            outputs = cls_head(embeddings.to(device))
-            loss = criterion(outputs, targets)
+            embeddings, targets = embeddings[:, :emb_chunks, :].to(device), targets.to(device)
+            if not Config.TRAIN_ARGS['ATTN_POOLING']:
+                embeddings = embeddings[:,0,:]
+            logits = cls_head(embeddings).to(device)  # Forward pass
+            loss = criterion(logits, targets)
             total_val_loss += loss.item()
 
     return total_val_loss / len(validation_loader)
@@ -79,13 +85,17 @@ def train_cls(
 
     for epoch in range(num_epochs):
         train_loss = train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fusion, device, epoch)
-        #val_loss = validate_one_epoch(cls_head, validation_loader, criterion, emb_chunks, fusion, device)
+        val_loss = validate_one_epoch(cls_head, validation_loader, criterion, emb_chunks, fusion, device)
 
         train_loss_history.append(train_loss)
-        #val_loss_history.append(val_loss)
+        val_loss_history.append(val_loss)
 
-        # Save loss curves periodically
-        #if epoch % 20 == 0 and epoch != 0: plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch,os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_epoch_{epoch}.png'))
+        # Save loss curves periodicallyif Config.TRAIN_ARGS['ATTN_POOLING']:
+        if epoch % 20 == 0 and epoch != 0:
+            plot_loss_curves(
+                train_loss_history, val_loss_history, suffix, num_epochs,
+                os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_partial.png')
+            )
 
     # Save final model and loss curves
     #torch.save(cls_head.state_dict(), os.path.join(Config.OUTPUT_PATH, f'weights/{suffix}.pth'))
