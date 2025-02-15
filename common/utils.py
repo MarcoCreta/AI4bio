@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from config import Config
 import torch
+import random
+from transformers import pipeline, AutoTokenizer, AutoModel, T5Tokenizer
+import re
 
 def read_fasta(file_path:str):
     sequences = []
@@ -67,7 +70,7 @@ def pathways_to_class_mapping(
 
     return class_mapping
 
-def count_tokens(dataset, tokenizer):
+def count_tokens(dataset, model):
     """
     Computes the ordered count of tokenized sequences.
 
@@ -79,9 +82,24 @@ def count_tokens(dataset, tokenizer):
     Returns:
         None
     """
+
+
+
+    sequences = dataset.sequences
+    if model == "Rostlab/prot_bert":
+        tokenizer = AutoTokenizer.from_pretrained(model, do_lower_case=False)
+        sequences = [" ".join(list(sequence)) for sequence in sequences]
+    if model == "Rostlab/prot_t5_xl_bfd":
+        tokenizer = T5Tokenizer.from_pretrained(model, do_lower_case=False)
+        sequences = [" ".join(list(sequence)) for sequence in sequences]
+        sequences = [re.sub(r"[UZOB]", "X", sequence) for sequence in sequences]
+    if model == "nferruz/ProtGPT2":
+        tokenizer = AutoTokenizer.from_pretrained(model, do_lower_case=False)
+        sequences = [list(sequence) for sequence in sequences]
+
+
     # Tokenize sequences and compute their lengths
-    #re.sub(r"[UZOB]", "X", sequence_Example)
-    tokenized_lengths = np.array([len(tokenizer(" ".join(list(dataset[148][1])), add_special_tokens=True).input_ids) for _, sequence, *_ in dataset])
+    tokenized_lengths = np.array([len(tokenizer("".join(sequence), add_special_tokens=False).input_ids) for sequence in sequences])
     tokenized_lengths = np.sort(tokenized_lengths)
     #remove top 0.03% outliers
     tokenized_lengths = tokenized_lengths[0:int(len(tokenized_lengths)*0.997)]
@@ -97,10 +115,13 @@ def count_tokens(dataset, tokenizer):
     return counts
 
 
-def print_counts(counts):
+def print_counts(counts, model, n_chunks):
     import numpy as np
     import matplotlib.pyplot as plt
     import os
+
+    # Get model basename
+    model_name = os.path.basename(model)
 
     # Indices represent token counts, counts[i] = count of sequences with i tokens
     indices = np.arange(len(counts))
@@ -109,47 +130,45 @@ def print_counts(counts):
     plt.figure(figsize=(12, 6))
     plt.bar(indices, counts, width=0.8, color='cornflowerblue', label='Bar Values', capsize=5)
 
-    # Labels and Title for Barplot
-    plt.title("Accuracy of Model vs. Dataset Size", fontsize=14)
-    plt.xlabel("Dataset Size", fontsize=12)
-    plt.ylabel("Mean Absolute Percentage Error", fontsize=12)
-
-    # Legend
+    # Labels and Title for Barplot with model included
+    plt.title(f"tokens count for {model_name}", fontsize=14)
+    plt.xlabel("Sequences Length", fontsize=12)
+    plt.ylabel("Sequences count", fontsize=12)
     plt.legend()
 
     # Save the barplot
-    barplot_path = os.path.join(Config.OUTPUT_PATH, "plots/barplot.jpg")
+    barplot_path = os.path.join(Config.OUTPUT_PATH, f"plots/barplot_{model_name}.jpg")
     plt.tight_layout()
     plt.savefig(barplot_path, dpi=300)
     plt.show()
     print(f"Barplot saved as {barplot_path}")
 
     # Adding Boxplot with Binning
-    plt.figure(figsize=(12, 6))
-
-    # Create bins with a width of 512
-    residue = len(counts)%512
-    max_bin = len(counts)+ (512 - residue)
-    bin_edges = np.arange(0, max_bin, 512)
+    bin_width = 512
+    residue = len(counts) % bin_width
+    max_bin = len(counts) + (bin_width - residue) if residue != 0 else len(counts)
+    bin_edges = np.arange(0, max_bin + 1, bin_width)
     binned_data = [counts[start:end] for start, end in zip(bin_edges[:-1], bin_edges[1:])]
 
-    # Flatten data and filter out empty bins for boxplot
+    # Sum counts in each bin, ignoring empty bins
     binned_values = [np.sum(bin_group) for bin_group in binned_data if len(bin_group) > 0]
 
-    # Plotting Barplot
+    data_perc = sum(binned_values[:n_chunks])/sum(binned_values)
+    print(f"percentage of data considered: {data_perc:.4f}")
+
+    # Plotting Binned Data as Barplot
     plt.figure(figsize=(12, 6))
-    # Adjust x-axis to show all labels clearly
-    plt.xticks(ticks=np.arange(len(binned_values)), labels=[str(x) for x in binned_values], rotation=45)
+    plt.xticks(ticks=np.arange(len(binned_values)), labels=bin_edges[1:], rotation=45)
+    plt.bar(np.arange(len(binned_values)), binned_values, width=0.8, color='cornflowerblue',
+            label='Bar Values', capsize=5)
 
-    plt.bar(np.arange(len(binned_values)), binned_values, width=0.8, color='cornflowerblue', label='Bar Values', capsize=5)
-
-    # Labels and Title for Boxplot
-    plt.title("Boxplot of Binned Data (512 Width)", fontsize=14)
-    plt.xlabel("Bins (Width=512)", fontsize=12)
+    # Labels and Title for Boxplot with bin width and model included
+    plt.title(f"tokens Binned Data (Bin Width = {bin_width}) for {model_name}", fontsize=14)
+    plt.xlabel(f"Bins (Width={bin_width})", fontsize=12)
     plt.ylabel("Counts in Bins", fontsize=12)
 
     # Save the boxplot
-    boxplot_path = os.path.join(Config.OUTPUT_PATH, "plots/hist.jpg")
+    boxplot_path = os.path.join(Config.OUTPUT_PATH, f"plots/hist_{model_name}.jpg")
     plt.tight_layout()
     plt.savefig(boxplot_path, dpi=300)
     plt.show()
@@ -169,11 +188,8 @@ def compute_multilabel_class_weights(onehot_labels):
     num_classes = onehot_labels.shape[1]
     class_counts = onehot_labels.sum(dim=0).cpu().numpy()  # Count occurrences of each class
 
-    # Avoid division by zero (if a class has no samples)
-    class_counts[class_counts == 0] = 1
-
     # Compute inverse sqrt class weights (to downweight frequent classes)
-    class_weights = 1.0 / np.sqrt(class_counts)
+    class_weights = 1.0 / (np.sqrt(class_counts +1) - 1)
 
     # Normalize to keep values reasonable
     class_weights = class_weights / class_weights.sum()
@@ -187,3 +203,21 @@ def merge_embeddings(embeddings):
     Assumes embeddings are in the shape (num_windows, embedding_dim).
     """
     raise NotImplementedError
+
+
+def seed_worker(worker_id):
+    worker_seed = Config.RANDOMNESS["PYTORCH_SEED"] + worker_id
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+def set_random_seeds():
+    torch.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
+    np.random.seed(Config.RANDOMNESS["NUMPY_SEED"])
+    torch.cuda.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
+    random.seed(Config.RANDOMNESS["PYTHON_SEED"])
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    g = torch.Generator()
+    g.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
+    return g

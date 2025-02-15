@@ -238,51 +238,150 @@ def precompute_prot_gpt2(device):
     print(f"Dataset precomputed successfully and saved in: {output_path}")
 
 
-def precompute_prot_t5(device):
-    # Load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(
-        "Rostlab/prot_t5_xl_bfd",
-        do_lower_case=False,
-        padding=True,
-        truncation=True,
-        model_max_length=512,
-        return_tensors="pt"
-    )
-    model = AutoModel.from_pretrained("Rostlab/prot_t5_xl_bfd").to(device)
+import os
+import re
+import numpy as np
+import torch
+from transformers import T5Tokenizer, T5Model, T5EncoderModel
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+def precompute_prot_t5(device, checkpoint_interval=100):
+    print("precomputing protein_t5")
+
+    # Define file paths for checkpoint and final output.
+    checkpoint_path = os.path.join(Config.OUTPUT_PATH, "data", "prot_t5_multi_checkpoint.pt")
+    final_output_path = os.path.join(Config.OUTPUT_PATH, "data", "prot_t5_multi.pt")
+
+    # Initialize ProtT5 tokenizer and model.
+    tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_bfd", do_lower_case=False)
+    T5EncoderModel._keys_to_ignore_on_load_unexpected = ["decoder.*"]
+    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_bfd").to(device)
     model.eval()  # Set model to evaluation mode
 
-    # Load dataset and dataloader
+    # Ensure a pad token is set; if not, assign it to eos_token.
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id  # For ProtT5, the input ends with the EOS token.
+
+    # Load dataset and create DataLoader (assumes FastaDataset and Config are defined)
     dataset = FastaDataset(file_path=Config.DATASET)
     dataloader = DataLoader(
         dataset,
         batch_size=1,
         drop_last=False,
-        pin_memory=(str(device).startswith("cuda")),
+        pin_memory=str(device).startswith("cuda"),
         pin_memory_device=str(device)
     )
 
+    # Define window parameters in token space.
+    # We want each window to be of fixed length 512 tokens.
+    # Since we append the EOS token at the end, we can use 511 tokens from the tokenized sequence.
+    max_seq_length = 512
+    usable_length = max_seq_length - 1  # Reserve one slot for the EOS token.
+    shift_size = usable_length // 2  # 50% overlap (e.g. 255 tokens)
+    max_windows = 5
+
     embeddings = []
+    start_index = 0
+    if os.path.exists(checkpoint_path):
+        print(f"Found checkpoint at {checkpoint_path}. Loading...")
+        checkpoint = torch.load(checkpoint_path)
+        # Assume checkpoint was saved as a tensor; convert it to a list.
+        if isinstance(checkpoint, torch.Tensor):
+            embeddings = checkpoint.numpy().tolist()
+        else:
+            embeddings = checkpoint
+        start_index = len(embeddings)
+        print(f"Resuming from checkpoint. Starting at iteration {start_index}.")
+
+    # Iterate over the dataset, skipping examples already processed.
     for i, instance in tqdm(enumerate(dataloader), desc="batch"):
+        if i < start_index:
+            continue
 
-        sequence = re.sub(r"[UZOB]", "X", instance[1])
-        inputs = tokenizer(sequence, truncation=True, max_length=512, add_special_tokens=True)
-        inputs = {k: torch.tensor(v).to(device) for k, v in inputs.items() if k in tokenizer.model_input_names}
+        # Extract the raw protein sequence.
+        # (Assumes instance[1][0] is the sequence string.)
+        sequence = instance[1][0]
 
-        # Perform forward pass to get embeddings
-        with torch.no_grad():
-            outputs = model(**inputs)
+        # Preprocessing for ProtT5:
+        # 1. Replace rare amino acids with "X"
+        sequence = re.sub(r"[UZOB]", "X", sequence)
+        # 2. Insert spaces between characters (if not already present)
+        spaced_sequence = " ".join(list(sequence))
+        # (The model expects input of the form: "A C D E ... [EOS]")
 
-        # Extract embeddings from the last hidden state
-        last_hidden_state = outputs.last_hidden_state.cpu()  # Move to CPU for storage
-        #using embeddings coming from encoder only as stated in specifications for feature extraction
-        embeddings.extend([embedding[2].numpy() for embedding in last_hidden_state])  # Use the first token's embedding
+        # Tokenize the full (preprocessed) sequence without adding special tokens.
+        tokenized_inputs = tokenizer(
+            spaced_sequence,
+            truncation=True,
+            max_length=1536,
+            add_special_tokens=False
+        )
+        input_ids = tokenized_inputs["input_ids"]
+        attention_mask = tokenized_inputs["attention_mask"]
+        seq_length = len(input_ids)
 
-    # Convert embeddings to tensor and save
+        sequence_embeddings = []
+        for window in range(max_windows):
+            start_idx = window * shift_size
+            end_idx = start_idx + usable_length
+            if start_idx >= seq_length:
+                break
+
+            # Extract a window from the tokenized sequence.
+            sub_input_ids = input_ids[start_idx:end_idx]
+            sub_attention_mask = attention_mask[start_idx:end_idx]
+
+            # Append the EOS token at the end.
+            window_ids = sub_input_ids + [eos_token_id]
+            window_attention_mask = sub_attention_mask + [1]
+
+
+            inputs = {
+                "input_ids": torch.tensor([window_ids]).to(device),
+                "attention_mask": torch.tensor([window_attention_mask]).to(device),
+            }
+
+            try:
+                with torch.no_grad():
+                    # For ProtT5 we run only the encoder (decoder_input_ids is None).
+                    outputs = model(input_ids=inputs["input_ids"],
+                                    attention_mask=inputs["attention_mask"])
+            except Exception as e:
+                print(f"Error at index {i}: seq_length {seq_length}, indices [{start_idx}:{end_idx}], "
+                      f"fragment length {len(sub_input_ids)}; sequence: {sequence}")
+                continue
+
+            # Extract the encoder embeddings.
+            # The provided example uses outputs[2] as the encoder embedding.
+            # We then mean-pool over the token dimension to obtain a single vector.
+            sequence_embeddings.append(outputs.last_hidden_state.mean(dim=1).cpu().numpy()[0])
+
+        # If no window produced an embedding, create a zero vector with the model's hidden size.
+        if len(sequence_embeddings) == 0:
+            hidden_size = model.config.hidden_size
+            sequence_embeddings.append(np.zeros(hidden_size))
+        # Zero-pad if fewer than max_windows embeddings were produced.
+        while len(sequence_embeddings) < max_windows:
+            sequence_embeddings.append(np.zeros_like(sequence_embeddings[0]))
+
+        embeddings.append(sequence_embeddings)
+ 
+        # Save checkpoint every checkpoint_interval iterations.
+        if (i + 1) % checkpoint_interval == 0:
+            checkpoint_tensor = torch.tensor(np.array(embeddings), dtype=torch.float32)
+            torch.save(checkpoint_tensor, checkpoint_path)
+            print(f"Checkpoint saved at iteration {i + 1}.")
+
+    # Save the final tensor.
     torch_embeddings = torch.tensor(np.array(embeddings), dtype=torch.float32)
-    torch.save(torch_embeddings, os.path.join(Config.OUTPUT_PATH, "data/prot_t5.pt"))
+    torch.save(torch_embeddings, final_output_path)
+    print(f"Dataset precomputed successfully and saved in: {final_output_path}")
 
 
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    precompute_prot_gpt2(device)
+    precompute_prot_t5(device, 2)

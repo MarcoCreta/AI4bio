@@ -25,7 +25,9 @@ class FastaDataset(Dataset):
         # Map pathways to numeric class indices (OrderedDict ensures consistency)
         self.pathway_to_class = OrderedDict()
         if class_mapping:
+
             tmp = [('default',0)] #set default class to 0
+
             tmp.extend([(pathway, idx+1) for idx, pathway in enumerate(class_mapping.keys())])
             self.pathway_to_class = OrderedDict(tmp)
 

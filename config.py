@@ -15,7 +15,7 @@ class Config():
     }
 
     TRAIN_ARGS = {
-        "N_EPOCHS" : 300,
+        "N_EPOCHS" : 1,
         "EMB_FUSION_FN" : None,
         "BATCH_SIZE" : 64,
         "LEARNING_RATE" : 1e-5,
