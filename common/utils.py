@@ -11,6 +11,7 @@ import torch
 import random
 from transformers import pipeline, AutoTokenizer, AutoModel, T5Tokenizer
 import re
+import torch.nn as nn
 
 def read_fasta(file_path:str):
     sequences = []
@@ -37,15 +38,6 @@ def pathways_to_class_mapping(
 ) -> dict:
     """
     Generate a mapping of pathways to class identifiers from multiple FASTA files.
-
-    Args:
-        path (str): Directory containing the input files.
-        input_names (List[str]): List of input file names without extensions.
-        extension (str): File extension for the input files (default: "fasta").
-        output_name (Optional[str]): Name of the output JSON file (default: None).
-
-    Returns:
-        dict: Mapping of pathways to their corresponding protein identifiers.
     """
     class_mapping = {}
 
@@ -55,10 +47,9 @@ def pathways_to_class_mapping(
             _, identifiers = read_fasta(file_path)
             class_mapping[file_name] = identifiers
 
-            print(f"class mapping: {file_path} - {'|'.join(str(key) + ':' + str(len(v)) for key, v in class_mapping.items())}")
-
         except IOError as e:
-            print(f"Error reading {file_path}: {e}")
+            if file_name != "default":
+                print(f"Error reading {file_path}: {e}")
 
     if output_name:
         output_path = os.path.join(path, f"{output_name}.json")
@@ -73,17 +64,7 @@ def pathways_to_class_mapping(
 def count_tokens(dataset, model):
     """
     Computes the ordered count of tokenized sequences.
-
-    Args:
-        dataset: Iterable of tuples containing sequence data (e.g., (id, sequence, ...)).
-        tokenizer: Tokenizer with an `encode` method that returns tokenized sequences.
-        output_file (str): Path to the file where the result will be saved as JSON.
-
-    Returns:
-        None
     """
-
-
 
     sequences = dataset.sequences
     if model == "Rostlab/prot_bert":
@@ -175,7 +156,7 @@ def print_counts(counts, model, n_chunks):
     print(f"Boxplot saved as {boxplot_path}")
 
 
-def compute_multilabel_class_weights(onehot_labels):
+def compute_multilabel_class_weights(onehot_labels, fn = None, norm=False):
     """
     Compute class weights for multi-label classification based on class frequency.
 
@@ -186,13 +167,18 @@ def compute_multilabel_class_weights(onehot_labels):
         torch.Tensor: Weights for each class, shape (num_classes,)
     """
     num_classes = onehot_labels.shape[1]
+
     class_counts = onehot_labels.sum(dim=0).cpu().numpy()  # Count occurrences of each class
 
     # Compute inverse sqrt class weights (to downweight frequent classes)
-    class_weights = 1.0 / (np.sqrt(class_counts +1) - 1)
+    if fn:
+        class_weights = 1.0 / fn(class_counts)
+    else:
+        class_weights = 1.0 / class_counts
 
     # Normalize to keep values reasonable
-    class_weights = class_weights / class_weights.sum()
+    if norm:
+        class_weights = class_weights / class_weights.sum()
 
     return class_weights
 
@@ -215,9 +201,30 @@ def set_random_seeds():
     np.random.seed(Config.RANDOMNESS["NUMPY_SEED"])
     torch.cuda.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
     random.seed(Config.RANDOMNESS["PYTHON_SEED"])
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
     g = torch.Generator()
     g.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
     return g
+
+    # Convert each multi-hot vector to a unique identifier.
+    # For example, treat each vector as a binary number.
+
+def multihot_to_int(label_vector):
+    # label_vector is something like [1, 0, 1] which becomes '101'
+    # Then convert to integer using base 2.
+    binary_str = ''.join(str(x) for x in label_vector)
+    return int(binary_str, 2)
+
+
+
+def initialize_weights(self):
+    for m in self.modules():
+        if isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.BatchNorm1d):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)

@@ -52,7 +52,7 @@ def get_data_loaders_for_fold(train_indices, val_indices, dataset, config, devic
     train_dataset_fold = Subset(dataset, train_indices)
     val_dataset_fold = Subset(dataset, val_indices)
 
-    train_sampler = BalancedBatchSampler(train_dataset_fold)
+    train_sampler = BalancedBatchSampler(train_dataset_fold, Config.USE_DEFAULT)
     train_dataloader = DataLoader(
         train_dataset_fold,
         batch_size=config.TRAIN_ARGS['BATCH_SIZE'],
@@ -98,12 +98,14 @@ def train_and_evaluate_fold(fold, train_indices, val_indices, dataset, config, d
         config.FF_ARGS['INPUT_SIZE'],
         config.FF_ARGS['HIDDEN_SIZE'],
         config.FF_ARGS['OUTPUT_SIZE'],
-        config.FF_ARGS['DROPOUT']
+        config.FF_ARGS['DROPOUT'],
+        Config.TRAIN_ARGS['EMB_CHUNKS'],
     )
 
     # Compute class weights (using the full dataset labels in this example).
+
     weights = torch.tensor(
-        compute_multilabel_class_weights(dataset.get_labels()),
+        compute_multilabel_class_weights(dataset.get_labels(), np.sqrt, norm=True),
         dtype=torch.float
     ).to(device)
 
@@ -133,9 +135,9 @@ def train_and_evaluate_fold(fold, train_indices, val_indices, dataset, config, d
     actual_val_indices = val_indices
     embeddings_val = dataset.embeddings[actual_val_indices]
     if not config.TRAIN_ARGS['ATTN_POOLING']:
-        embeddings_val = embeddings_val[:, 0, :]
+        embeddings_val = torch.flatten(embeddings_val[:,:Config.TRAIN_ARGS['EMB_CHUNKS'],:], start_dim=1)
 
-    predicted_classes = cls.inference(embeddings_val.to(device))
+    predicted_classes = cls.inference(embeddings_val.to(device), Config.FF_ARGS['THRESHOLD'])
     labels_val = dataset.get_labels()[actual_val_indices]
     labels_np = labels_val.clone().cpu().numpy()
 
@@ -148,7 +150,7 @@ def train_and_evaluate_fold(fold, train_indices, val_indices, dataset, config, d
 
     print(
         f"Fold {fold + 1} - Macro Precision: {macro_precision:.4f}, Macro Recall: {macro_recall:.4f}, Macro F1: {macro_f1:.4f}")
-    report = classification_report(labels_np, predicted_classes, target_names=["default"] + config.CLASSES)
+    report = classification_report(labels_np, predicted_classes, target_names=config.CLASSES)
     print(f"Fold {fold + 1} Classification Report:\n{report}")
 
     return {

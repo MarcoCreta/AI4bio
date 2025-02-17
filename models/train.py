@@ -6,15 +6,13 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from config import Config
 from common.utils import merge_embeddings
-
+from models.classifier.losses import WeightedFocalLoss
+from torch import autograd
 
 def train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fusion, device, epoch):
     """Train the classification head for one epoch."""
     cls_head.train()
     total_train_loss = 0
-
-    #num_chunks = emb_chunks  # Typically 5
-    #chunk_positions = torch.tensor([256 * i + 256 for i in range(num_chunks)], dtype=torch.float32, device=device)
 
     with tqdm(train_loader, unit="batch") as tepoch:
         for _, _, _, targets, embeddings in tepoch:
@@ -24,16 +22,17 @@ def train_one_epoch(cls_head, train_loader, optimizer, criterion, emb_chunks, fu
 
             embeddings, targets = embeddings[:,:emb_chunks,:].to(device), targets.to(device)
 
-            #batch_size = embeddings.shape[0]
-            #token_positions = chunk_positions.unsqueeze(0).expand(batch_size, -1)  # Shape: (batch_size, num_chunks)
-
             if not Config.TRAIN_ARGS['ATTN_POOLING']:
-                embeddings = embeddings[:,0,:]
+                embeddings = torch.flatten(embeddings, start_dim=1)
 
-            logits = cls_head(embeddings).to(device)  # Forward pass
-            loss = criterion(logits, targets)
-            loss.backward()
-            optimizer.step()
+            with autograd.detect_anomaly():
+                logits = cls_head(embeddings).to(device)  # Forward pass
+                loss = criterion(logits, targets)
+                loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(cls_head.parameters(), max_norm=1.0)
+
+                optimizer.step()
 
             total_train_loss += loss.item()
             tepoch.set_postfix(loss=loss.item())
@@ -49,7 +48,7 @@ def validate_one_epoch(cls_head, validation_loader, criterion, emb_chunks, fusio
         for _, _, _, targets, embeddings in validation_loader:
             embeddings, targets = embeddings[:, :emb_chunks, :].to(device), targets.to(device)
             if not Config.TRAIN_ARGS['ATTN_POOLING']:
-                embeddings = embeddings[:,0,:]
+                embeddings = torch.flatten(embeddings, start_dim=1)
             logits = cls_head(embeddings).to(device)  # Forward pass
             loss = criterion(logits, targets)
             total_val_loss += loss.item()
@@ -66,19 +65,23 @@ def plot_loss_curves(train_loss_history, val_loss_history, suffix, epoch, save_p
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
+    plt.ylim(top=max(0.5, max(max(train_loss_history), max(val_loss_history))))
     plt.savefig(save_path)
     plt.close()
 
 
 def train_cls(
-        cls_head, train_loader, validation_loader, optimizer,weights=None, num_epochs=100, emb_chunks=None, fusion=None, suffix='test', device='cuda:0'
+        cls_head, train_loader, validation_loader, optimizer, weights=None, gamma=0, num_epochs=100, emb_chunks=None, fusion=None, suffix='test', device='cuda:0'
 ):
     """Train a classification head for a multi-label classification task."""
 
     cls_head.to(device)
 
     # Use Binary Cross Entropy with Logits for multi-label classification
+
     criterion = nn.BCEWithLogitsLoss(pos_weight=weights)
+    #weights = torch.tensor([1,1,1]).to(device)
+    #criterion = WeightedFocalLoss(alpha=weights, gamma=gamma, reduction="mean")
 
     train_loss_history = []
     val_loss_history = []
@@ -97,7 +100,7 @@ def train_cls(
                 os.path.join(Config.OUTPUT_PATH, f'loss_curves/{suffix}_partial.png')
             )
 
-    # Save final model and loss curves
+    #Save final model and loss curves
     #torch.save(cls_head.state_dict(), os.path.join(Config.OUTPUT_PATH, f'weights/{suffix}.pth'))
     plot_loss_curves(
         train_loss_history, val_loss_history, suffix, num_epochs,

@@ -1,18 +1,11 @@
-from Bio import SeqIO
-from sklearn.preprocessing import LabelEncoder
-from torch.utils.data import Dataset, BatchSampler, DataLoader, WeightedRandomSampler
-from typing import Dict, Optional
-from collections import OrderedDict, Counter
-from common.utils import read_fasta
-from sklearn.utils.class_weight import compute_sample_weight
-import numpy as np
-
 from torch.utils.data import Dataset
-import torch
-import os
 from Bio import SeqIO
 from collections import OrderedDict
 from typing import Optional, Dict, List
+from config import Config
+import numpy as np
+from common.utils import compute_multilabel_class_weights
+from torch.utils.data import Sampler, Subset
 
 class FastaDataset(Dataset):
     def __init__(self, file_path: str, data_path: Optional[str] = None, class_mapping: Optional[Dict[str, List[str]]] = None):
@@ -26,9 +19,9 @@ class FastaDataset(Dataset):
         self.pathway_to_class = OrderedDict()
         if class_mapping:
 
-            tmp = [('default',0)] #set default class to 0
+            tmp = []
 
-            tmp.extend([(pathway, idx+1) for idx, pathway in enumerate(class_mapping.keys())])
+            tmp.extend([(pathway, idx) for idx, pathway in enumerate(class_mapping.keys())])
             self.pathway_to_class = OrderedDict(tmp)
 
             # Reverse mapping: protein ID -> list of class indices
@@ -41,6 +34,7 @@ class FastaDataset(Dataset):
             reverse_mapping = {key:np.unique(reverse_mapping[key]) for key in reverse_mapping}
 
         try:
+            def_cls = [0] if Config.USE_DEFAULT else []
             for record in SeqIO.parse(file_path, "fasta"):
                 self.sequences.append(str(record.seq))  # Protein sequence
                 identifier = record.id.split("|")[-1]  # Extract identifier from FASTA header
@@ -48,7 +42,8 @@ class FastaDataset(Dataset):
 
                 if class_mapping:
                     # Assign list of class indices (multi-label support)
-                    label_indices = reverse_mapping.get(identifier, [0])
+
+                    label_indices = reverse_mapping.get(identifier, def_cls)
                     self.labels.append(label_indices)
 
         except Exception as e:
@@ -91,31 +86,8 @@ class FastaDataset(Dataset):
 
 
 
-
-
-
-
-#https://discuss.pytorch.org/t/balanced-sampling-between-classes-with-torchvision-dataloader/2703/6
-class BalancedBatchSampler(WeightedRandomSampler):
-    def __init__(self, dataset: FastaDataset):
-        labels = dataset.get_labels()
-        if labels is None:
-            raise ValueError("Dataset must have labels for balanced sampling.")
-
-        sample_weights = np.sqrt(compute_sample_weight(class_weight="balanced", y=labels))
-
-        super().__init__(sample_weights, len(sample_weights))
-
-from torch.utils.data import Sampler
-import numpy as np
-import torch
-from sklearn.utils.class_weight import compute_class_weight
-from common.utils import compute_multilabel_class_weights
-from torch.utils.data import Sampler, Subset
-
-
 class BalancedBatchSampler(Sampler):
-    def __init__(self, dataset: FastaDataset):
+    def __init__(self, dataset: FastaDataset, default_given=False):
         """
         Balanced batch sampler for multi-label datasets.
         Args:
@@ -132,11 +104,17 @@ class BalancedBatchSampler(Sampler):
             onehot_labels = dataset.get_labels()
             self.indices = list(range(len(dataset)))
 
+        labels = onehot_labels.clone()
+        if not default_given:
+            #including default class
+            ones_column = torch.ones((labels.size(0), 1), dtype=labels.dtype)
+            labels = torch.cat([ones_column, labels], dim=1)
+
         # Compute per-class weights.
-        class_weights = compute_multilabel_class_weights(onehot_labels)
+        class_weights = compute_multilabel_class_weights(labels, np.sqrt, norm=True)
 
         # Compute per-sample weights based on their labels.
-        sample_weights = (onehot_labels.cpu().numpy() * class_weights).sum(axis=1)
+        sample_weights = (labels.cpu().numpy() * class_weights).sum(axis=1)
         sample_weights = sample_weights / sample_weights.sum()  # Normalize
 
         # Store sample weights as a tensor.

@@ -14,8 +14,7 @@ from sklearn.metrics import classification_report
 from sklearn.metrics import confusion_matrix
 import pprint
 import pandas as pd
-
-
+from common.utils import multihot_to_int, initialize_weights
 
 
 def compute_per_class_scores(cf, class_names, labels_info):
@@ -61,8 +60,6 @@ def compute_per_class_scores(cf, class_names, labels_info):
             "Precision": precision, "Recall": recall, "F1": f1
         }
 
-    import pandas as pd
-
     # Create a DataFrame from the results dictionary.
     df = pd.DataFrame(results).T
     df = df[['TP', 'FP', 'FN', 'TN', 'Precision', 'Recall', 'F1']]
@@ -80,7 +77,6 @@ if __name__ == "__main__":
     torch.cuda.manual_seed(Config.RANDOMNESS["PYTORCH_SEED"])
     random.seed(Config.RANDOMNESS["PYTHON_SEED"])
 
-    # Ensure deterministic behavior in CUDA (may slow down performance)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -106,31 +102,17 @@ if __name__ == "__main__":
     onehot_labels = dataset.get_labels()  # shape: (num_samples, num_classes)
     # Convert the one-hot labels to NumPy and to integers (0/1)
     onehot_labels_np = onehot_labels.cpu().numpy().astype(int)
-
-
-    # Convert each multi-hot vector to a unique identifier.
-    # For example, treat each vector as a binary number.
-    def multihot_to_int(label_vector):
-        # label_vector is something like [1, 0, 1] which becomes '101'
-        # Then convert to integer using base 2.
-        binary_str = ''.join(str(x) for x in label_vector)
-        return int(binary_str, 2)
-
-
+    #unique labelling for each class combination
     combination_labels = np.array([multihot_to_int(label) for label in onehot_labels_np])
 
-    # Now perform stratified splitting using these "fake" classes.
+    #perform stratified splitting using these "fake" classes.
     indices = np.arange(len(dataset))
-
-    # Split into train_val and test (for example, 20% test)
     train_val_indices, test_indices = train_test_split(
         indices,
         test_size=0.2,
         stratify=combination_labels,
         random_state=42
     )
-
-    # Now, split train_val into train and validation (for example, 25% of train_val for validation)
     train_indices, val_indices = train_test_split(
         train_val_indices,
         test_size=0.25,
@@ -145,7 +127,7 @@ if __name__ == "__main__":
 
     # Create DataLoaders.
     # For training, we use a BalancedBatchSampler on the training subset.
-    train_sampler = BalancedBatchSampler(train_dataset)
+    train_sampler = BalancedBatchSampler(train_dataset, Config.USE_DEFAULT)
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=Config.TRAIN_ARGS['BATCH_SIZE'],
@@ -183,12 +165,13 @@ if __name__ == "__main__":
         Config.FF_ARGS['INPUT_SIZE'],
         Config.FF_ARGS['HIDDEN_SIZE'],
         Config.FF_ARGS['OUTPUT_SIZE'],
-        Config.FF_ARGS['DROPOUT']
+        Config.FF_ARGS['DROPOUT'],
+        Config.TRAIN_ARGS['EMB_CHUNKS'],
     )
 
     # Compute class weights based on the entire dataset’s one-hot labels.
     weights = torch.tensor(
-        compute_multilabel_class_weights(onehot_labels), dtype=torch.float
+        compute_multilabel_class_weights(onehot_labels, np.sqrt, norm=True), dtype=torch.float
     ).to(device)
 
     optimizer = torch.optim.Adam(
@@ -201,9 +184,10 @@ if __name__ == "__main__":
     cls = train_cls(
         cls_head,
         train_dataloader,
-        val_dataloader,  # Optionally, pass the validation dataloader to monitor validation performance.
+        val_dataloader,
         optimizer,
         weights,
+        Config.TRAIN_ARGS['GAMMA'],
         Config.TRAIN_ARGS['N_EPOCHS'],
         Config.TRAIN_ARGS['EMB_CHUNKS'],
         None,
@@ -211,23 +195,20 @@ if __name__ == "__main__":
         str(device)
     )
 
+    #inference on validation dataset
     embeddings = test_dataset.dataset.embeddings[test_dataset.indices]
     onehot_labels =test_dataset.dataset.get_labels()[test_dataset.indices]
     if not Config.TRAIN_ARGS['ATTN_POOLING']:
-        embeddings = embeddings[:, 0, :]
+        embeddings = torch.flatten(embeddings[:,:Config.TRAIN_ARGS['EMB_CHUNKS'],:], start_dim=1)
+    predicted_classes = cls.inference(embeddings.to(device), Config.FF_ARGS['THRESHOLD'])
 
-    predicted_classes = cls.inference(embeddings.to(device))
-
+    #compute scikit statistics
     labels_np = onehot_labels.clone().cpu().numpy()
-
-    class_names = ["default"]
-    class_names.extend(Config.CLASSES)
-
+    class_names = Config.CLASSES
     report = classification_report(labels_np, predicted_classes, target_names=class_names)
-
     print("\nPer-Class Scores:\n", report)
 
-
+    #compute custom fine-grained counts
     combination_true = np.array([multihot_to_int(label) for label in labels_np.astype(int)])
     combination_pred = np.array([multihot_to_int(label) for label in predicted_classes.astype(int)])
     cf_labels_int, cf_labels_idx = np.unique(combination_labels, return_index=True)

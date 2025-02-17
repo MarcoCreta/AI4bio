@@ -11,15 +11,11 @@ class ClassificationHead(nn.Module):
         self.layer1 = nn.Linear(input_size, hidden_size)
         self.bn1 = nn.BatchNorm1d(hidden_size)
         self.dropout1 = nn.Dropout(dropout)
-        self.activation = nn.ReLU()
+        self.activation = nn.LeakyReLU()
 
         self.layer2 = nn.Linear(hidden_size, hidden_size//2)
         self.bn2 = nn.BatchNorm1d(hidden_size//2)
         self.dropout2 = nn.Dropout(dropout)
-
-        self.layer3 = nn.Linear(hidden_size//2, hidden_size//2)
-        self.bn3 = nn.BatchNorm1d(hidden_size//2)
-        self.dropout3 = nn.Dropout(dropout)
 
         self.linear4 = nn.Linear(hidden_size//2, output_size)
 
@@ -34,61 +30,31 @@ class ClassificationHead(nn.Module):
         x = self.activation(x)
         x = self.dropout2(x)
 
-        #x = self.layer3(x)
-        #x = self.bn3(x)
-        #x = self.activation(x)
-        #x = self.dropout3(x)
-
         x = self.linear4(x)
         return x
 
 
-class VanillaTokenPositionalEncoding(nn.Module):
-    """
-    Standard Transformer-style positional encoding for an instance of shape (5, 1280).
-    Uses sinusoidal encodings to represent token positions.
-    """
+class PositionalEncoding(nn.Module):
+    """Positional encoding."""
+    def __init__(self, num_hiddens, dropout, max_len=5):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        # Create a long enough P
+        self.P = torch.zeros((1, max_len, num_hiddens))
+        X = torch.arange(max_len, dtype=torch.float32).reshape(
+            -1, 1) / torch.pow(10000, torch.arange(
+            0, num_hiddens, 2, dtype=torch.float32) / num_hiddens)
+        self.P[:, :, 0::2] = torch.sin(X)
+        self.P[:, :, 1::2] = torch.cos(X)
 
-    def __init__(self, d_model=1280, seq_len=5):
-        """
-        Args:
-            d_model (int): Embedding dimension size (default=1280).
-            seq_len (int): Number of sequence positions (default=5 for chunks).
-        """
-        super(VanillaTokenPositionalEncoding, self).__init__()
-        self.d_model = d_model
-        self.seq_len = seq_len
-
-        # Initialize the positional encoding matrix
-        pe = torch.zeros(seq_len, d_model)
-
-        # Compute positions: [0, 1, 2, 3, 4] for 5 chunks
-        position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)  # Shape: (5, 1)
-
-        # Compute the sinusoidal frequencies
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-
-        # Apply sin to even indices and cos to odd indices
-        pe[:, 0::2] = torch.sin(position * div_term)  # Sin for even dimensions
-        pe[:, 1::2] = torch.cos(position * div_term)  # Cos for odd dimensions
-
-        # Register buffer to prevent updating during training
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        """
-        Args:
-            x: Input tensor of shape (batch_size, seq_len=5, d_model=1280).
-
-        Returns:
-            x: Tensor with positional encodings added.
-        """
-        return x + self.pe[:x.size(1)]
+    def forward(self, X):
+        X = X + self.P[:, :X.shape[1], :].to(X.device)
+        return self.dropout(X)
 
 
-class RotaryPositionalEmbedding(nn.Module):
+class RotaryPositionalEncoding(nn.Module):
     def __init__(self, dim: int = 1280, max_len: int = 5):
-        super(RotaryPositionalEmbedding, self).__init__()
+        super(RotaryPositionalEncoding, self).__init__()
         self.dim = dim
 
         # Compute rotation frequencies
@@ -151,11 +117,14 @@ class AttentionPooling(nn.Module):
 
 
 class ClsAttn(nn.Module):
-    def __init__(self, input_size=1280, hidden_size=256, output_size=2, dropout=0.5):
+    def __init__(self, input_size=1280, hidden_size=256, output_size=2, dropout=0.5, chunk_size=5):
         super(ClsAttn, self).__init__()
-        self.rotary_encoding = RotaryPositionalEmbedding(input_size)  # Corrected
-        self.chunked_encoding = VanillaTokenPositionalEncoding(input_size)  # Corrected
-        self.attn_pooling = AttentionPooling(input_size)
+        if Config.TRAIN_ARGS['ATTN_POOLING']:
+            if Config.TRAIN_ARGS['CHUNK_RE']:
+                self.rotary_encoding = RotaryPositionalEncoding(input_size)
+            if Config.TRAIN_ARGS['TOKEN_PE']:
+                self.chunked_encoding = PositionalEncoding(input_size, dropout=dropout)
+            self.attn_pooling = AttentionPooling(input_size)
         self.FF = ClassificationHead(input_size, hidden_size, output_size, dropout)
 
     def forward(self, x):
@@ -174,18 +143,11 @@ class ClsAttn(nn.Module):
         self.eval()
         with torch.no_grad():
 
-            outputs = self.forward(x)  # Forward pass
-            probabilities = F.softmax(outputs, dim=1)  # Apply softmax
-
-            # Get the class with the maximum probability
-            predicted_min = torch.argmax(probabilities, dim=1)
+            outputs = self.forward(x)
+            probabilities = F.sigmoid(outputs)
 
             # Create a tensor with True where probabilities exceed the threshold
             predicted_classes = (probabilities > threshold).int()
-
-            # Ensure that the class with the max probability is included, even if its prob is below the threshold
-            for i in range(probabilities.size(0)):  # Loop over batch
-                predicted_classes[i, predicted_min[i]] = 1
 
             predicted_classes = predicted_classes.cpu().numpy()
 

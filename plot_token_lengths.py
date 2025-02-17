@@ -11,4 +11,4 @@ if __name__ == "__main__":
         dataset = FastaDataset(file_path=Config.DATASET)
 
         counts = count_tokens(dataset, model)
-        print_counts(counts, model, 3)
+        print_counts(counts, model, 2)
