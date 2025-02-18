@@ -48,7 +48,6 @@ The following pretrained models are employed for feature extraction:
 1. Clone the repository
 2. Put UP000005640.fasta file in the data folder
 3. Precompute the dataset
-4.
 ```sh
    python precompute_data.py
 ```
