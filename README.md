@@ -55,6 +55,6 @@ The following pretrained models are employed for feature extraction:
 5. Manually map and add the desired pathway mappings R-HSA-* to the data folder
 6. Change parameters from config file as desired
 7. Run training on the given pathways:
-   ```sh
-   python main.py
-   ```
+```sh
+python main.py
+```
