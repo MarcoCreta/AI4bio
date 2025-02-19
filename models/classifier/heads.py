@@ -33,23 +33,39 @@ class ClassificationHead(nn.Module):
         x = self.linear4(x)
         return x
 
-
-class PositionalEncoding(nn.Module):
-    """Positional encoding."""
-    def __init__(self, num_hiddens, dropout, max_len=5):
-        super().__init__()
+class SinusoidalPositionalEncoding(nn.Module):
+    def __init__(self, num_tokens=3, embedding_dim=1280, dropout=0.1):
+        super(SinusoidalPositionalEncoding, self).__init__()
+        # Create a positional encoding matrix of shape (num_tokens, embedding_dim)
+        pe = torch.zeros(num_tokens, embedding_dim)
         self.dropout = nn.Dropout(dropout)
-        # Create a long enough P
-        self.P = torch.zeros((1, max_len, num_hiddens))
-        X = torch.arange(max_len, dtype=torch.float32).reshape(
-            -1, 1) / torch.pow(10000, torch.arange(
-            0, num_hiddens, 2, dtype=torch.float32) / num_hiddens)
-        self.P[:, :, 0::2] = torch.sin(X)
-        self.P[:, :, 1::2] = torch.cos(X)
+        position = torch.arange(0, num_tokens, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, embedding_dim, 2, dtype=torch.float) * (-math.log(10000.0) / embedding_dim))
 
-    def forward(self, X):
-        X = X + self.P[:, :X.shape[1], :].to(X.device)
-        return self.dropout(X)
+        pe[:, 0::2] = torch.sin(position * div_term)  # Apply sin to even indices
+        pe[:, 1::2] = torch.cos(position * div_term)  # Apply cos to odd indices
+        pe = pe.unsqueeze(0)  # Reshape to (1, num_tokens, embedding_dim)
+
+        # Register pe as a buffer so it gets moved to the proper device with the model
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # x should have shape (B, num_tokens, embedding_dim)
+        x = x + self.pe
+        return self.dropout(x)
+
+class LearnablePositionalEncoding(nn.Module):
+    def __init__(self, num_tokens=3, embedding_dim=1280):
+        super(LearnablePositionalEncoding,self).__init__()
+        # Create a learnable parameter with shape (1, num_tokens, embedding_dim)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, num_tokens, embedding_dim))
+        # Initialize the positional embedding (optional)
+        nn.init.trunc_normal_(self.pos_embedding, std=0.02)
+
+    def forward(self, x):
+        # x should have shape (B, num_tokens, embedding_dim)
+        return x + self.pos_embedding
 
 
 class RotaryPositionalEncoding(nn.Module):
@@ -120,15 +136,19 @@ class ClsAttn(nn.Module):
     def __init__(self, input_size=1280, hidden_size=256, output_size=2, dropout=0.5, chunk_size=5):
         super(ClsAttn, self).__init__()
         if Config.TRAIN_ARGS['ATTN_POOLING']:
+            if Config.TRAIN_ARGS['LEARN_PE']:
+                self.rotary_encoding = LearnablePositionalEncoding(chunk_size, input_size)
             if Config.TRAIN_ARGS['CHUNK_RE']:
                 self.rotary_encoding = RotaryPositionalEncoding(input_size)
             if Config.TRAIN_ARGS['TOKEN_PE']:
-                self.chunked_encoding = PositionalEncoding(input_size, dropout=dropout)
+                self.chunked_encoding = SinusoidalPositionalEncoding(input_size, dropout=dropout)
             self.attn_pooling = AttentionPooling(input_size)
         self.FF = ClassificationHead(input_size, hidden_size, output_size, dropout)
 
     def forward(self, x):
         if Config.TRAIN_ARGS['ATTN_POOLING']:
+            if Config.TRAIN_ARGS['LEARN_PE']:
+                x = self.rotary_encoding(x)
             if Config.TRAIN_ARGS['CHUNK_RE']:
                 x = self.rotary_encoding(x)  # Apply RoPE first
             if Config.TRAIN_ARGS['TOKEN_PE']:

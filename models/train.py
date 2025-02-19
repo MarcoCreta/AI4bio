@@ -79,9 +79,13 @@ def train_cls(
 
     # Use Binary Cross Entropy with Logits for multi-label classification
 
-    criterion = nn.BCEWithLogitsLoss(pos_weight=weights)
-    #weights = torch.tensor([1,1,1]).to(device)
-    #criterion = WeightedFocalLoss(alpha=weights, gamma=gamma, reduction="mean")
+    if Config.TRAIN_ARGS['LOSS'] == 'bce':
+        if not Config.TRAIN_ARGS['WEIGHTS']:
+            weights = torch.full_like(weights, 1).to(device).float()
+        criterion = nn.BCEWithLogitsLoss(pos_weight=weights)
+    elif Config.TRAIN_ARGS['LOSS'] == 'focal':
+        weights = torch.full_like(weights, Config.TRAIN_ARGS['ALPHA']).to(device).float()
+        criterion = WeightedFocalLoss(alpha=weights, gamma=gamma, reduction="mean")
 
     train_loss_history = []
     val_loss_history = []
@@ -93,7 +97,7 @@ def train_cls(
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
 
-        # Save loss curves periodicallyif Config.TRAIN_ARGS['ATTN_POOLING']:
+        # Save loss curves periodically
         if epoch % 20 == 0 and epoch != 0:
             plot_loss_curves(
                 train_loss_history, val_loss_history, suffix, num_epochs,

@@ -64,8 +64,11 @@ def compute_per_class_scores(cf, class_names, labels_info):
     df = pd.DataFrame(results).T
     df = df[['TP', 'FP', 'FN', 'TN', 'Precision', 'Recall', 'F1']]
 
-    # Round float columns to 4 decimal places.
-    df[['Precision', 'Recall', 'F1']] = df[['Precision', 'Recall', 'F1']].round(4)
+    df[['Precision', 'Recall', 'F1']] = df[['Precision', 'Recall', 'F1']].round(3)
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.width', 1000)
+    pd.set_option('display.max_colwidth', None)
     print(df)
 
 
@@ -104,6 +107,9 @@ if __name__ == "__main__":
     onehot_labels_np = onehot_labels.cpu().numpy().astype(int)
     #unique labelling for each class combination
     combination_labels = np.array([multihot_to_int(label) for label in onehot_labels_np])
+    # Select IDs that appear more than 10 times
+    unique_ids, counts = np.unique(combination_labels, return_counts=True)
+    combination_labels = combination_labels * np.isin(combination_labels, unique_ids[counts > 3])
 
     #perform stratified splitting using these "fake" classes.
     indices = np.arange(len(dataset))
@@ -198,8 +204,11 @@ if __name__ == "__main__":
     #inference on validation dataset
     embeddings = test_dataset.dataset.embeddings[test_dataset.indices]
     onehot_labels =test_dataset.dataset.get_labels()[test_dataset.indices]
+
+    embeddings = embeddings[:,:Config.TRAIN_ARGS['EMB_CHUNKS'],:]
     if not Config.TRAIN_ARGS['ATTN_POOLING']:
-        embeddings = torch.flatten(embeddings[:,:Config.TRAIN_ARGS['EMB_CHUNKS'],:], start_dim=1)
+        embeddings = torch.flatten(embeddings, start_dim=1)
+
     predicted_classes = cls.inference(embeddings.to(device), Config.FF_ARGS['THRESHOLD'])
 
     #compute scikit statistics

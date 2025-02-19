@@ -4,11 +4,11 @@ class Config():
     DATASET = "/homes/mcreta/AI4bio/static/data/UP000005640_9606.fasta"
     OUTPUT_PATH = "/homes/mcreta/AI4bio/static"
 
-    DATA_NAME = "data/prot_gpt2_multi.pt"
+    DATA_NAME = "data/prot_t5_multi.pt"
 
-    CLASSES = ["R-HSA-metabolism", "R-HSA-109581"]
+    CLASSES = ["R-HSA-metabolism", "R-HSA-109581", "R-HSA-signal_trasduction", "R-HSA-73894.5"]
 
-    USE_DEFAULT = False
+    USE_DEFAULT = True
 
     RANDOMNESS = {
         "PYTORCH_SEED" : 66,
@@ -21,13 +21,21 @@ class Config():
         "BATCH_SIZE" : 64,
         "LEARNING_RATE" : 1e-4,
         "WEIGHT_DECAY" : 3e-3,
-        "GAMMA": None,
         "EMB_CHUNKS" : 3,
         "EMB_SIZE" : 1280,
+
         "ATTN_POOLING": False,
-        "TOKEN_PE" : True,
-        "CHUNK_RE" : True,
+        "LEARN_PE": False,
+        "TOKEN_PE" : False,
+        "CHUNK_RE" : False,
+
+        "WEIGHTS" : False,
+
+        "LOSS" : "focal",
+        "ALPHA" : 1,
+        "GAMMA": 1,
     }
+
 
     FF_ARGS = {
         "INPUT_SIZE" : 1280,
@@ -47,9 +55,15 @@ class Config():
             cls.FF_ARGS['INPUT_SIZE'] = cls.TRAIN_ARGS['EMB_SIZE']
         else :
             cls.FF_ARGS['INPUT_SIZE'] = cls.TRAIN_ARGS['EMB_CHUNKS'] * cls.TRAIN_ARGS['EMB_SIZE']
-            cls.TRAIN_ARGS['TOKEN_PE'] = False
-            cls.TRAIN_ARGS['CHUNK_RE'] = False
+            cls.TRAIN_ARGS['TOKEN_PE'] = None
+            cls.TRAIN_ARGS['CHUNK_RE'] = None
+            cls.TRAIN_ARGS['LEARN_PE'] = None
 
+        if cls.TRAIN_ARGS['LOSS'] == "bce":
+            cls.TRAIN_ARGS['GAMMA'] = None
+            cls.TRAIN_ARGS['ALPHA'] = None
+        if cls.TRAIN_ARGS['LOSS'] == "focal":
+            cls.TRAIN_ARGS['weights'] = False
 
         #cls.FF_ARGS['HIDDEN_SIZE'] = cls.FF_ARGS['INPUT_SIZE']//2
 
